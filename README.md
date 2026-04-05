@@ -7,9 +7,9 @@
 ## 使用须知
 
 - 确保你的 Claude Code 支持 agent teams 模式。
-- 调研的主题要写在 CLAUDE.md 中，因此一个主题对应一个项目文件夹。CLAUDE.md 中支持更加具体的描述你所关心的课题，比如，列出来哪些主题是要排除的，来控制主题范围。比如我在`CLAUDE.md.example`这个主题是 visual token reduction，且不包含 VLA 相关的论文。
-- 每次搜索任务围绕一条 keywords 展开，例如开启 agent 后，在对话中输入 `以"visual token reduction"为关键词，我搜索2025年到2026年的所有论文，整理前 20 页`，然后 agent 会开始自主扒论文，长期自主运行，直到把20页翻完。
-- agent会核验每一篇论文是否符合主题的要求，符合主题的条目会存到`papers.json`中。两次不同 keywords 的搜索会累积在同一个`papers.json`中。
+- 调研的主题写在 CLAUDE.md 中，因此一个主题对应一个项目文件夹。CLAUDE.md 中支持更加具体描述你所关心的课题，比如，列出来哪些主题是要排除的，来控制主题范围。比如我在`CLAUDE.md.example`中的主题是 visual token reduction，且不包含 VLA 相关的论文。
+- 每次搜索任务围绕一条 keywords 展开，例如开启 agent 后，在对话中输入 `以"visual token reduction"为关键词，帮我搜索2025年到2026年的所有论文，整理前 20 页`，然后 agent 会开始自主扒论文，长期自主运行，直到把20页翻完。
+- agent 会核验搜索列表中的每一篇论文是否符合主题的要求，符合主题的条目会存到`papers.json`中。两次不同 keywords 的搜索会累积在同一个`papers.json`中。
 
 ## 设计选择
 
@@ -20,4 +20,4 @@
 
 ## 进阶使用
 
-可以在 CLAUDE.md 中增加额外的特性，比如，自动化论文归类、自动 survey 产出。
+可以在 CLAUDE.md 中增加额外的特性，比如，自动化论文归类、自动 survey 产出等。
