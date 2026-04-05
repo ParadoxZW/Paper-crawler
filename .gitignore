@@ -1,0 +1,11 @@
+papers.json
+.claude/
+.playwright-cli/
+.playwright-mcp/
+__pycache__/
+*.py[cod]
+docs/
+output/
+sources/
+CLAUDE.md
+CLAUDE_v1.md

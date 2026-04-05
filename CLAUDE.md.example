@@ -1,0 +1,167 @@
+# CLAUDE.md
+
+## Purpose
+
+Collect papers on visual token pruning/compression for MLLM/VLM via Google Scholar, and store metadata locally.
+
+Relevance is judged from title and abstract, not keyword overlap alone.
+
+## Scope
+
+Include papers mainly about:
+- reducing, selecting, pruning, merging, or compressing visual tokens in MLLM/VLM
+- adaptive visual token budgeting or routing for efficiency
+
+Exclude papers about:
+- generic LLM token compression
+- pure ViT token pruning without MLLM/VLM context
+- VLA models
+
+## Web Scraping
+
+- **Scholar fetch strategy**: Randomly pick from `https://xueshu.lanfanshu.cn` or `https://scholar.google.com` as base URL for each Google Scholar request. When fetching Google Scholar pages, always use Playwright MCP directly. Do not try `curl` or `WebFetch` first.
+- **Busy page handling**: When using Playwright and a "busy" page appears, wait 5 seconds, then click the "点击刷新重试" button on the page (do NOT reload/re-navigate the URL).
+- **Rate limit handling**: When rate-limited by Google Scholar (403 or busy page), wait a random duration between 20-30 seconds before retrying. Do not retry immediately. Use `sleep $((RANDOM % 11 + 20))` between attempts and limit to 3 retries before reporting failure.
+
+## Playwright MCP Configuration
+
+The project defines two Playwright MCP instances in `.mcp.json`, both using `--isolated` mode (each agent/teammate launches its own independent browser process — no conflicts):
+
+| Instance | Mode | Usage |
+|----------|------|-------|
+| `playwright-headless` | Headless (`--headless`) | Default. Used for routine Scholar page scraping and automation tasks. |
+| `playwright-headed` | Headed (visible) | Fallback when headless mode encounters CAPTCHA or unresolvable blocking pages. Supports manual intervention. |
+
+Rules:
+- **Default to `playwright-headless`**. Only switch to `playwright-headed` after 3 retries in headless mode still fail.
+- **Never use `pkill -f chrome`**: This kills all Chrome processes system-wide, including other teammates' browsers.
+- **Each teammate may call Playwright directly**: No need for a dedicated browser-agent or serialized access. Each teammate gets its own browser instance.
+- **Session cleanup**: Always call `browser_close` when complete one accessing task (e.g., fetch a page, extract content, etc.).
+
+## Web Browsing Rules (general, non-Scholar)
+
+- **Default**: Use the Fetch tool (`WebFetch`) for browsing non-Scholar web pages (e.g., arXiv, OpenReview).
+- **Fallback**: When Fetch has limitations (e.g., JavaScript-rendered content), use `playwright-headless`.
+
+## Teammate Lifecycle
+
+- **One teammate per page**: Each teammate handles exactly ONE results page, then shuts down.
+- **Fresh context**: For each new page, spawn a fresh teammate. Do NOT reuse teammates across pages — this avoids context bloat and stale-state issues.
+- **Immediate execution**: When working as a sub-agent/teammate, always start the assigned task immediately. Do not continue or reference work from previous context. Read only the current task message and begin execution.
+- Teammate shutdown: After sending results back to the team lead, the teammate should accept any `shutdown_request`. The team lead sends `shutdown_request` immediately after receiving results.
+
+## Search Rules
+
+- One task equals one user-provided keyword group.
+- Enter the full keyword group into Scholar as one query.
+- Use explicit year-range URL parameters for filtering, e.g.:
+  - `https://<BASE_URL>/scholar?start=<OFFSET>&q=<QUERY>&hl=zh-CN&as_sdt=0,5&as_ylo=2025&as_yhi=2026`
+- Review every results page within that filtered year range, not just page 1.
+- **Page-review workflow** (teammates must follow this order):
+  1. Scrape all paper titles and authors from the results page.
+  2. Batch-run `precheck_duplicates.py` on every paper **first** to discard duplicates.
+  3. Only for non-duplicate papers, open each link individually for content/relevance check and metadata resolution.
+  This avoids unnecessary page visits for already-collected papers.
+
+## Scheduling And Roles
+
+**MANDATORY: Use Agent Teams mode (the `TeamCreate`/`SendMessage`/`TeamDelete` tool chain). Do NOT use plain `Agent` tool calls for page review. If `TeamCreate` is not yet loaded, fetch it via `ToolSearch` first.**
+
+Workflow:
+1. Call `TeamCreate` to create the team (e.g., `team_name: "scholar-review"`).
+2. Spawn teammates via `Agent` with `team_name` parameter — this is what makes them team members rather than plain subagents.
+3. Use `SendMessage` to assign pages and coordinate work.
+4. When all pages are done, send `shutdown_request` to each teammate and wait for all `shutdown_approved` confirmations. Do NOT call `TeamDelete` unless the user explicitly requests cleanup.
+
+Concurrency rules:
+- At most `2` concurrent teammates running at the same time.
+- Launch each teammate for a different `start=` offset, with a 5-second delay between launches due to rate limits.
+- Each teammate processes exactly one page, returns results, then shuts down.
+- **Fill empty slots immediately**: when one teammate finishes, launch the next pending page right away. Do NOT wait for both teammates to complete before starting new ones.
+
+### Main agent (team lead) responsibilities
+- create and tear down the team
+- maintain the overall task state and dispatch pages to teammates
+- keep the current in-memory view of existing and newly accepted papers
+- make the final merge vs. add decision
+- write `papers.json`
+- **cross-check teammate results for duplicates**: teammates handle primary dedup via precheck + judgment, but team lead must still cross-check against its in-memory view of all collected papers. This catches cases teammates miss — e.g., same work with substantially different titles across arXiv/conference versions, or papers already added by earlier teammates in the same session.
+- **keyword append**: when the same paper is found by a different keyword group, append the new keyword to the existing record's `keywords` array instead of creating a duplicate.
+- **venue and URL updates**: when a later search reveals that a paper previously recorded as "arXiv preprint" has been published at a conference/journal, update the `publish` field (prefer arXiv abstract URL for `url`, but update venue name).
+
+### Page-review teammate responsibilities
+- inspect one results page
+- use `playwright-headless` for Scholar pages (each teammate has its own isolated browser)
+- judge relevance from title plus abstract
+- resolve metadata for relevant papers
+- run `scripts/precheck_duplicates.py`
+- return structured results to the team lead via `SendMessage`, using the format below
+
+### Teammate return format
+
+Results sent back to team lead must include three sections:
+
+1. **New papers** — full metadata for each (title, authors, date, url, publish, keywords, abstract)
+2. **Duplicates needing keyword append** — existing title + index, so team lead can append the new keyword
+3. **Out-of-scope papers** — title + brief reason for exclusion
+
+### Page-review teammates must NOT
+- write `papers.json`
+
+## Output Format
+
+All records are stored in `papers.json`. Each item must contain:
+
+```json
+{
+  "title": "Paper Title",
+  "authors": ["Author A", "Author B"],
+  "date": "2025/09/00",
+  "url": "https://arxiv.org/abs/2509.12345",
+  "publish": "arXiv preprint",
+  "keywords": ["visual token pruning mllm"],
+  "abstract": "论文摘要（中文翻译）"
+}
+```
+
+### Field rules
+
+- `authors`: array of strings
+- `date`: `YYYY/MM/DD`; unknown month or day must be `00`
+- `url`: prefer arXiv abstract URL, otherwise OpenReview or publisher page
+- `publish`: venue name if known, otherwise `arXiv preprint`
+- `keywords`: array of full keyword-group strings
+- `abstract`: the paper abstract, **teammate must translate the FULL original abstract to Chinese — no truncation, no summarization, preserve all details**
+
+### Date priority
+
+1. arXiv first submission date
+2. OpenReview posting/submission date
+3. publisher or project page date
+4. Scholar-visible date
+
+### Data integrity
+
+- Keep titles faithful to the canonical paper title
+- Normalize whitespace before writing JSON
+- Update existing records instead of creating duplicates
+- **JSON safety**: String fields (especially `abstract`) must NOT contain unescaped ASCII double quotes (`"`, U+0022). Use Chinese book-title marks `「」` or escaped `\"` instead. Always validate JSON after writing.
+
+## Deduplication
+
+Before adding or merging a paper, run:
+
+```bash
+python3 scripts/precheck_duplicates.py \
+  --title "Paper Title" \
+  --authors-json '["Author One", "Author Two"]'
+```
+
+The script supports two mutually exclusive ways to pass authors: `--authors-json` (preferred) or `--author` repeated per name. Do not mix them.
+
+The script is a precheck that returns possible duplicates based primarily on title similarity, with author match as auxiliary info. **Teammates must make the final dedup judgment** by considering:
+- precheck results (match_count, title_diff, author_match)
+- whether the candidate and match share the same authors (even if the script's `author_match` is false — this happens when only one author is passed)
+- whether the candidate is a different version of the same work (e.g., arXiv preprint vs. conference version with different title)
+
+Only after the teammate confirms a paper is genuinely new should it be included in results sent to the team lead.
